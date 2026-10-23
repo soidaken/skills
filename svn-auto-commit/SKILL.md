@@ -14,7 +14,7 @@ metadata:
 1. **必须用户明确确认后才 commit**：把待提交的完整结果报告给用户，然后**停下、结束本轮**，等用户回复确认。用户说“svn 提交”“帮我提交”只是启动流程的意图，**不是**提交授权。
 2. **提交说明必须 UTF-8**：写文件（UTF-8 无 BOM）+ `svn commit -F msg.txt --encoding UTF-8`，不要用内联 `-m` 传中文。
 3. **不得边报告边提交**：报告与 commit 不能在同一轮完成；“我已经提交了你看看”是错误做法。
-4. **冲突不靠猜**：二进制冲突、树冲突、属性/externals 冲突一律停下来问用户。
+4. **冲突不靠猜**：二进制冲突、树冲突、属性/externals 冲突一律停下来问用户；报冲突时必须附上该文件的修改者（见 5.1）。
 
 ## 1. 先确认 svn 可用
 
@@ -86,9 +86,16 @@ svn update --accept postpone <wc_root>
 
 冲突要在**同一轮里逐个过**，不要遇到第一个就停住、也不要一次问一堆零碎问题：
 
+0. 先取修改者，作为后面每一步的报告材料：
+
+```powershell
+powershell -NoProfile -File scripts/conflict-authors.ps1 -Path <wc_root> [-SvnPath <绝对路径>]
+```
+
+   每个冲突文件输出 `conflict_type`（text/tree/property）、`last_changed_author`、`recent_revisions`（revision / author / date / message 首行）、`authors`。把相冲突文件的人写进报告，用户才能判断该找谁对。取不到（权限、离线）就明说“取不到作者”，不要编。
 1. `conflicted` 列表依次处理：看 `<<<<<<<` / `=======` / `>>>>>>>` 段落（或 `.mine` 与 `.rNEW` 的差异）→ 判断归哪一类 → 按上表处理 → `svn resolve --accept working <file>` → 再跑一次 `svn-preflight.ps1` 确认该项已消失。
 2. 能自己处理的全部处理完；**处理不了的、或者拿不准取舍的**（二进制冲突、树冲突、属性/externals 冲突、两边都改了同一段业务逻辑）不要强行选一边。
-3. 把剩下的整理成一张表，一次性交给用户确认，每行至少给：文件路径、冲突类型、本地侧改了什么、远端侧改了什么、你建议怎么选（取本地/取远端/手工合并）。然后停下等回复。
+3. 把剩下的整理成一张表，一次性交给用户确认，每行至少给：文件路径、冲突类型、**本地/远端两侧的修改者与 revision**、本地侧改了什么、远端侧改了什么、你建议怎么选（取本地/取远端/手工合并）。然后停下等回复。
 4. 汇总时明确告知：**当前不会提交**；待用户给出选择后再处理、重新 preflight、进确认门。
 
 任何情况下不要用 `svn resolve --accept theirs-full` / `mine-full` 批量刷过全部冲突来“清掉红色状态”。用户没拍板的部分就留在冲突状态。
@@ -128,7 +135,7 @@ svn commit -F "$env:TEMP\svnmsg.txt" --encoding UTF-8 --non-interactive <file1> 
 
 1. 工作副本：`wc_root`、`url`、当前 revision、`against`。
 2. 待提交文件表：路径 + 状态码 + 是否属于本次功能；`unversioned` 单独列、不自动 add。
-3. 冲突：`conflicted` / `tree_conflicted` 及你的处理方式和结果（无冲突也要写明“无冲突”。）。
+3. 冲突：`conflicted` / `tree_conflicted` 及你的处理方式和结果（无冲突也要写明“无冲突”。）；每个冲突文件都要附上**修改者**（`conflict-authors.ps1` 输出的 `authors` / `last_changed_author` 与对应 revision），让用户知道该拍板给谁。
 4. 待执行的提交说明草稿（完整文本）。
 5. 一句明确的收口：“以上是否正确？回复确认我就提交（revision 会变）。”
 

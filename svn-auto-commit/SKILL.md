@@ -16,34 +16,46 @@ metadata:
 3. **不得边报告边提交**：报告与 commit 不能在同一轮完成；“我已经提交了你看看”是错误做法。
 4. **冲突不靠猜**：二进制冲突、树冲突、属性/externals 冲突一律停下来问用户；报冲突时必须附上该文件的修改者（见 5.1）。
 
-## 1. 先确认 svn 可用
+## 1. 先确认 svn 能用
+
+**前提：机器上 svn 通常已经能用（TortoiseSVN 图形界面、VisualSVN 或同事装过），真正缺的往往只是“命令行客户端不在 PATH 里”，AI 叫不到 `svn`。所以本节默认目标是“补上 CLI 并让它可被调用”，不是重装一套 svn。**
 
 ```powershell
-powershell -NoProfile -File scripts/find-svn.ps1
+powershell -NoProfile -File scripts/find-svn.ps1            # 只看状态
+powershell -NoProfile -File scripts/find-svn.ps1 -AddToPath # 找到但不在 PATH 时，顺手写进用户 PATH
 ```
 
-返回 JSON：`svn_path` / `svn_version` / `source` / `on_path`。exit 0 可用，exit 1 未安装。探测顺序是 PATH → 每个固定盘的 `Program Files` / `Soft` / `Software` / `Apps` 下的 SlikSVN、TortoiseSVN、VisualSVN、Apache 安装目录（svn 装在 D:、E: 上也能找到）。
+返回 JSON：`svn_path` / `svn_version` / `source` / `on_path` / `tortoisesvn_gui` / `path_added` / `path_target`。探测范围：PATH → 每个固定盘的 `Program Files` / `Soft` / `Software` / `Apps` 下的 SlikSVN、TortoiseSVN、VisualSVN、Apache（装在 D:、E: 上也找得到）。
 
-`on_path=false` 时**不要**依赖 `svn` 裸命令，直接用返回的绝对路径调用（同一次会话里改 PATH 不会自动生效）。
+按结果分四种情况处理：
 
-## 2. 缺 svn 时装（Windows）
+| 结果 | 做什么 |
+| --- | --- |
+| exit 0，`on_path=true` | 直接用 `svn`，什么都不用装 |
+| exit 0，`on_path=false` | 跑 `-AddToPath` 把 `path_target` 写进用户 PATH（幂等，已存在不会重复加），然后**本次仍用 `svn_path` 绝对路径**调用 |
+| exit 1，`tortoisesvn_gui` 有值 | svn 装了（GUI 在）但没装命令行客户端：补装 CLI 组件，见下 |
+| exit 1，无 GUI | 真的没有 svn：winget 装 SlikSVN，见下 |
+
+关键点：`-AddToPath` 改的是**用户级 PATH**，只对之后新开的终端/会话生效；当前这个 Agent 进程的环境变量不会跟新，所以同一个会话继续用绝对路径，别反复重试裸 `svn`。
+
+## 2. 补 CLI / 装 svn（Windows）
 
 按顺序选第一个可行的：
 
-1. `winget install --id Slik.Subversion -e --source winget` —— 自带 `svn.exe`，安装器会写系统 PATH，装完直接可用。
-2. 机器上已有 TortoiseSVN：它默认**不带**命令行客户端，需补装 CLI 组件。winget 安装可用 `--override "/quiet ADDLOCAL=CLI"`，但不保证生效——装完必须用 `find-svn.ps1` 复核；仍然找不到就改用 SlikSVN。
+1. **已装 TortoiseSVN、只缺 CLI**（最常见）：用命令行补装 CLI 组件，不重装 GUI。
+   - 能找到原安装包：`msiexec /i TortoiseSVN-x.y.z.msi /qb ADDLOCAL=CLI`（或交互式安装向导里选 Modify → command line client tools）。
+   - 已知安装包路径时也可用 winget 覆盖安装：`winget install --id TortoiseSVN.TortoiseSVN -e --override "/quiet ADDLOCAL=CLI"`，但**不保证**生效（winget 会追加 MSI 路径，参数可能被忽略），装完必须用 `find-svn.ps1` 复核；没出现就直接装 SlikSVN。
+2. **完全没有 svn**：`winget install --id Slik.Subversion -e --source winget` —— 自带 `svn.exe`，安装器会写 PATH。
 3. 没有 winget：从 <https://subversion.apache.org/packages.html#windows> 的官方推荐项（SlikSVN / VisualSVN）下载安装包，或装 TortoiseSVN 时勾选 “command line client tools”。
 
-跨平台：macOS `brew install subversion`；Debian/Ubuntu `sudo apt install subversion`。
-
-**关于“去 GitHub 下载 exe”**：Apache 的 GitHub 仓库只有源码，官方 Windows 二进制不发在 GitHub Releases。直链下载请用 SlikSVN / VisualSVN 官方站点；不要给用户一个 GitHub 上不存在的 exe 链接。
+**关于“去 GitHub 下载 exe”**：Apache 的 GitHub 仓库只有源码，官方 Windows 二进制不发在 GitHub Releases。不要给用户一个 GitHub 上不存在的 exe 链接。
 
 ## 3. PATH 规则
 
-- 优先选会自动写 PATH 的安装包（SlikSVN、VisualSVN 都行）。
-- 只有解压式/手工安装才需要自己加：用户级 `[Environment]::SetEnvironmentVariable('Path', $new, 'User')`，当前会话同时 `$env:Path += ";<bin>"`。
-- 新 PATH 只对新进程生效；不要去重启用户的终端或 IDE，继续用绝对路径即可。
-- 改 PATH 属于系统级改动：仅在用户同意安装 svn 的情况下做，并明确告知改了用户级 Path。
+- 优先选会自动写 PATH 的安装包（SlikSVN 写系统 PATH，VisualSVN 不一定写）。
+- 手工补时用 `find-svn.ps1 -AddToPath`（幂等、只改用户级 Path），不要手工拼一长串 PATH。
+- 新 PATH 只对新进程生效：不要去重启用户的终端或 IDE，本次会话继续用 `svn_path` 绝对路径，并告知用户“重开终端后就能直接用 `svn`”。
+- 改 PATH 属于系统级改动：在用户同意后做，并明确告知改了用户级 Path 以及加了哪个目录。
 
 ## 4. 提交前：列文件 + 冲突检查
 

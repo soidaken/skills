@@ -2,14 +2,19 @@
 <#
 .SYNOPSIS
   Locate a working svn.exe and report its version. Read-only.
+.PARAMETER AddToPath
+  Append the directory of the found svn.exe to the user PATH (idempotent) and to the
+  current process PATH, so plain `svn` works for the user and for later agent calls.
 .NOTES
   Probes PATH and the standard install locations on every fixed drive
   (SlikSVN, TortoiseSVN, VisualSVN, Apache), so a svn on D:/E: is still found.
+  Also reports whether the TortoiseSVN GUI exists, i.e. whether svn is installed
+  but only the command line client component is missing.
   Exit 0 = usable, exit 1 = not found.
   Output is a single JSON object on stdout (ASCII only, safe for any console codepage).
 #>
 [CmdletBinding()]
-param()
+param([switch]$AddToPath)
 
 $ErrorActionPreference = 'Continue'
 
@@ -77,17 +82,55 @@ foreach ($item in $found) {
 }
 
 if (-not $result) {
+    # No svn.exe anywhere: tell the caller whether a GUI-only TortoiseSVN is installed.
+    $gui = @()
+    foreach ($root in ($roots | Select-Object -Unique)) {
+        $p = Join-Path $root 'TortoiseSVN\bin\TortoiseProc.exe'
+        if (Test-Path -LiteralPath $p) { $gui += $p }
+    }
     [pscustomobject]@{
-        svn_path    = $null
-        svn_version = $null
-        source      = 'not-found'
-        on_path     = $false
+        svn_path        = $null
+        svn_version     = $null
+        source          = 'not-found'
+        on_path         = $false
+        tortoisesvn_gui = if ($gui.Count -gt 0) { $gui[0] } else { $null }
+        path_added      = $false
     } | ConvertTo-Json -Compress
     exit 1
 }
 
-$result | ConvertTo-Json -Compress
-if (-not $result.on_path) {
-    [Console]::Error.WriteLine("svn exists but is not on PATH. Use the absolute path above, or add $(Split-Path $result.svn_path) to PATH.")
+$added = $false
+if (-not $result.on_path -and $AddToPath) {
+    $dir = Split-Path -Path $result.svn_path -Parent
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (-not $userPath) { $userPath = '' }
+    $entries = @($userPath -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') } | Where-Object { $_ })
+    $alreadyThere = $false
+    foreach ($e in $entries) {
+        if ($e -ieq $dir.TrimEnd('\')) { $alreadyThere = $true; break }
+    }
+    if (-not $alreadyThere) {
+        $newUserPath = (@($entries) + $dir.TrimEnd('\')) -join ';'
+        [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+        $added = $true
+    }
+    $result.on_path = $true
+}
+
+$out = [pscustomobject]@{
+    svn_path        = $result.svn_path
+    svn_version     = $result.svn_version
+    source          = $result.source
+    on_path         = [bool]$result.on_path
+    tortoisesvn_gui = $null
+    path_added      = $added
+    path_target     = if ($AddToPath) { Split-Path -Path $result.svn_path -Parent } else { $null }
+}
+
+$out | ConvertTo-Json -Compress
+if (-not $out.on_path) {
+    [Console]::Error.WriteLine("svn exists but is not on PATH. Use the absolute path above, or re-run with -AddToPath to append $(Split-Path $result.svn_path -Parent) to the user PATH.")
+} elseif ($added) {
+    [Console]::Error.WriteLine("Added $(Split-Path $result.svn_path -Parent) to the user PATH. Open terminals and editor sessions need a restart; this agent session should keep using the absolute svn_path above.")
 }
 exit 0

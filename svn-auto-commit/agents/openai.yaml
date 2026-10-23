@@ -1,0 +1,4 @@
+interface:
+  display_name: "svn自动提交"
+  short_description: "SVN 提交前查文件、处理冲突，再安全提交"
+  default_prompt: "Use $svn-auto-commit to check my working copy, list the files involved and commit them safely."

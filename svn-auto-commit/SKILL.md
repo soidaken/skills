@@ -9,6 +9,12 @@ metadata:
 
 提交是不可撤销的对外动作，所以流程是：**确认工具 → 列文件 → 查冲突 → 处理冲突 → 再提交**。任何一步信息不全就停下问用户，不要猜。
 
+## 硬性要求（不可协商）
+
+1. **提交说明必须 UTF-8**：写文件（UTF-8 无 BOM）+ `svn commit -F msg.txt --encoding UTF-8`，不要用内联 `-m` 传中文。
+2. **列文件在前，提交在后**：没把涉及文件列给用户就不要 commit。
+3. **冲突不靠猜**：二进制冲突、树冲突、属性/externals 冲突一律停下来问用户。
+
 ## 1. 先确认 svn 可用
 
 ```powershell
@@ -80,13 +86,27 @@ svn update --accept postpone <wc_root>
 1. `svn status` 中不应再有 `C`。
 2. `svn diff <file...>` 扫一遍：没有调试代码、密钥、无关文件。
 3. **显式列出要提交的路径**。默认 `svn commit .` 会带上整个副本的所有改动，是常见的误提交来源。
-4. 认证/编码：命令可能卡在密码提示，先用 `--non-interactive` 试一次；中文提交信息写进文件再提交，并用 `--encoding UTF-8`：
+4. 认证：命令可能卡在密码提示，先用 `--non-interactive` 试一次（见第 6.1 节的提交说明编码要求）。
+5. 提交信息按仓库习惯写（`svn log -l 5` 看几条）。
+
+### 6.1 提交说明必须 UTF-8（硬性要求）
+
+每条 commit message 都必须以 UTF-8 字节提交，不能依赖控制台默认编码。实测（svn 1.9.7 / Windows，控制台 ANSI cp936）：`svn commit -m "中文说明"` 存进去的是 GBK 字节，`svn log --xml` 读出来是 `ÖÐÎÄ...`——真乱码，不可逆；中文 hook / CI 也会因非 UTF-8 失败。
+
+固定做法——**写文件 + `-F` + `--encoding UTF-8`**：
 
 ```powershell
-svn commit -F msg.txt --encoding UTF-8 --non-interactive <file1> <file2> ...
+# 明确以 UTF-8 无 BOM 写盘，避免 Win 默认编码
+$msg = "修改登录超时判断`r`n`r`n1) 超时阈值改为可配置`r`n2) 补充单元测试"
+[System.IO.File]::WriteAllText("$env:TEMP\svnmsg.txt", $msg, (New-Object System.Text.UTF8Encoding($false)))
+
+svn commit -F "$env:TEMP\svnmsg.txt" --encoding UTF-8 --non-interactive <file1> <file2> ...
 ```
 
-5. 提交信息按仓库习惯写（`svn log -l 5` 看几条）。
+- 不用内联 `-m` 传中文；纯英文短说明也建议走同一路径，行为一致。
+- 校验用 `svn log -l 1 --xml`：XML 固定 UTF-8，能看出真实存储内容。普通 `svn log` 按本地代码页输出，即使存储正确也可能显示成 `???`，不要拿它判断编码。
+- 若已提交成乱码：先告知用户，不要靠“再提交一次”掩盖；改历史需要 `svn propset --revprop svn:log`，且要服务端 `pre-revprop-change` hook 允许，由用户决定。
+- 提交说明过长时同样写文件，不要拼断命令行。
 
 ## 7. 收尾与汇报
 
